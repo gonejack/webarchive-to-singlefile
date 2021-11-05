@@ -174,7 +174,7 @@ type Resource struct {
 	dataURI string
 }
 
-func (r *Resource) SetData(data []byte) {
+func (r *Resource) ResetData(data []byte) {
 	r.WebResourceData = data
 	r.dataURI = ""
 }

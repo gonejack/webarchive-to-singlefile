@@ -153,7 +153,7 @@ func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 
 		res, exist := warc.GetResource(url)
 		if exist {
-			log.Printf("local: %s", url)
+			log.Printf("read local: %s", url)
 
 			rsp := &http.Response{
 				Status:           http.StatusText(200),
@@ -168,7 +168,7 @@ func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 
 			return r, rsp
 		} else {
-			log.Printf("remote: %s", url)
+			log.Printf("read remote: %s", url)
 			return r, nil
 		}
 	})
