@@ -41,7 +41,7 @@ func (c *WarcToHtml) Run() (err error) {
 		kong.UsageOnError(),
 	)
 	if c.About {
-		fmt.Println("Visit https://github.com/gonejack/embede-html")
+		fmt.Println("Visit https://github.com/gonejack/webarchive-to-singlefile")
 		return
 	}
 	if len(c.WebArchive) == 0 || c.WebArchive[0] == "*.webarchive" {
@@ -160,9 +160,9 @@ func (c *WarcToHtml) newContext(server *httptest.Server) (context.Context, conte
 }
 func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 	p := c.newProxy()
-	p.OnRequest().DoFunc(func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-		r.URL.Host = r.Host
-		url := r.URL.String()
+	p.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		req.URL.Host = req.Host
+		url := req.URL.String()
 
 		res, exist := warc.GetResource(url)
 		if exist {
@@ -173,37 +173,37 @@ func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 			rsp := &http.Response{
 				Status:           http.StatusText(200),
 				StatusCode:       200,
-				Request:          r,
-				TransferEncoding: r.TransferEncoding,
+				Request:          req,
+				TransferEncoding: req.TransferEncoding,
 				ContentLength:    int64(len(res.WebResourceData)),
 				Body:             io.NopCloser(bytes.NewReader(res.WebResourceData)),
 			}
 			rsp.Header = make(http.Header)
 			rsp.Header.Set("Content-Type", res.WebResourceMIMEType)
 
-			return r, rsp
+			return req, rsp
 		} else {
 			if c.Verbose {
 				log.Printf("read remote: %s", url)
 			}
-			return r, nil
+			return req, nil
 		}
 	})
-	p.OnResponse().DoFunc(func(r *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
-		if r.Request == nil || r.Request.Body == nil {
-			return r
+	p.OnResponse().DoFunc(func(rsp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+		if rsp.Request == nil || rsp.Request.Body == nil {
+			return rsp
 		}
 
-		url := r.Request.URL.String()
+		url := rsp.Request.URL.String()
 		_, exist := warc.GetResource(url)
 		if !exist {
-			rec := model.NewBodyRecorder(r.Body)
-			r.Body = rec
+			rec := model.NewBodyRecorder(rsp.Body)
+			rsp.Body = rec
 			go func() {
 				body := rec.Body()
 				res := &model.Resource{
-					WebResourceMIMEType:         r.Header.Get("content-type"),
-					WebResourceTextEncodingName: r.Header.Get("content-encoding"),
+					WebResourceMIMEType:         rsp.Header.Get("content-type"),
+					WebResourceTextEncodingName: rsp.Header.Get("content-encoding"),
 					WebResourceURL:              url,
 					WebResourceData:             body,
 				}
@@ -214,7 +214,7 @@ func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 			}()
 		}
 
-		return r
+		return rsp
 	})
 	return httptest.NewServer(p)
 }
