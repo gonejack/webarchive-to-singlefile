@@ -149,7 +149,7 @@ func (c *WarcToHtml) newContext(server *httptest.Server) (context.Context, conte
 		chromedp.Flag("enable-automation", true),
 		chromedp.Flag("password-store", "basic"),
 		chromedp.Flag("use-mock-keychain", true),
-		chromedp.Flag("ignore-certificate-errors", true),
+		chromedp.IgnoreCertErrors,
 		chromedp.ProxyServer(server.URL),
 	}
 	ctx, _ := chromedp.NewExecAllocator(context.TODO(), opts...)
