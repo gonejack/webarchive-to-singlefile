@@ -80,7 +80,7 @@ func (c *WarcToHtml) process(warcf string) (err error) {
 		chromedp.Navigate(w.WebMainResources.WebResourceURL),
 		chromedp.Sleep(time.Second*5),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			scroll := `$('html, body').animate({scrollTop:$(document).height()}, 4000, 'linear');`
+			scroll := `try{$('html, body').animate({scrollTop:$(document).height()}, 4000, 'linear')}catch(e){}`
 			_, exp, err := runtime.Evaluate(scroll).Do(ctx)
 			if err != nil {
 				return err
