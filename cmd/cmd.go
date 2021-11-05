@@ -89,10 +89,8 @@ func (c *WarcToHtml) process(warcf string) (err error) {
 			}
 			return nil
 		}),
-		chromedp.Sleep(time.Second*10),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			return chromedp.OuterHTML("html", &html).Do(ctx)
-		}),
+		chromedp.Sleep(time.Second*5),
+		chromedp.OuterHTML("html", &html),
 		//chromedp.ActionFunc(func(ctx context.Context) error {
 		//	dat, _, err := page.PrintToPDF().WithPrintBackground(true).Do(ctx)
 		//	if err != nil {
