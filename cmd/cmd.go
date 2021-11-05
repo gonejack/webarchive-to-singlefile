@@ -37,7 +37,7 @@ type WarcToHtml struct {
 func (c *WarcToHtml) Run() (err error) {
 	kong.Parse(&c.options,
 		kong.Name("webarchive-to-singlefile"),
-		kong.Description("This command line converts .html file into single complete html."),
+		kong.Description("This command line converts Safari's .webarchive file to complete .html."),
 		kong.UsageOnError(),
 	)
 	if c.About {
@@ -61,11 +61,11 @@ func (c *WarcToHtml) run() (err error) {
 	}
 	return
 }
-func (c *WarcToHtml) process(warcfile string) (err error) {
+func (c *WarcToHtml) process(warcf string) (err error) {
 	w := new(model.WebArchive)
-	err = w.From(warcfile)
+	err = w.From(warcf)
 	if err != nil {
-		return fmt.Errorf("cannot parse %s: %s", warcfile, err)
+		return fmt.Errorf("cannot parse %s: %s", warcf, err)
 	}
 
 	s := c.newServer(w)
@@ -102,7 +102,7 @@ func (c *WarcToHtml) process(warcfile string) (err error) {
 		//}),
 	)
 	if err != nil {
-		return fmt.Errorf("cannot render %s: %s", warcfile, err)
+		return fmt.Errorf("cannot render %s: %s", warcf, err)
 	}
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
@@ -118,7 +118,7 @@ func (c *WarcToHtml) process(warcfile string) (err error) {
 		return fmt.Errorf("cannot generate html: %s", err)
 	}
 
-	output := strings.TrimSuffix(warcfile, ".webarchive") + ".html"
+	output := strings.TrimSuffix(warcf, ".webarchive") + ".html"
 	return os.WriteFile(output, []byte(html), 0766)
 }
 func (c *WarcToHtml) newContext(server *httptest.Server) (context.Context, context.CancelFunc) {
@@ -253,6 +253,9 @@ func (c *WarcToHtml) patchCSS(doc *goquery.Document, warc *model.WebArchive) {
 				r, exist = warc.GetResource(warc.PatchRef(ref))
 			}
 			if exist {
+				if c.Verbose {
+					log.Printf("patching %s", ref)
+				}
 				ps = append(ps, ref, r.DataURI())
 			}
 		}
@@ -300,6 +303,9 @@ func (c *WarcToHtml) patchHTML(doc *goquery.Document, warc *model.WebArchive) {
 		case strings.HasPrefix(ref, "data:"):
 			return
 		default:
+			if c.Verbose {
+				log.Printf("patching %s", ref)
+			}
 			r, exist := warc.GetResource(ref)
 			if !exist {
 				r, exist = warc.GetResource(warc.PatchRef(ref))
