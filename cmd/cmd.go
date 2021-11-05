@@ -11,11 +11,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/alecthomas/kong"
-	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/elazarl/goproxy"
@@ -88,20 +89,33 @@ func (c *WarcToHtml) process(warcfile string) (err error) {
 			}
 			return nil
 		}),
-		chromedp.Sleep(time.Minute),
+		chromedp.Sleep(time.Second*10),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			return chromedp.OuterHTML("html", &html).Do(ctx)
 		}),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			dat, _, err := page.PrintToPDF().WithPrintBackground(true).Do(ctx)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile("output.pdf", dat, 0766)
-		}),
+		//chromedp.ActionFunc(func(ctx context.Context) error {
+		//	dat, _, err := page.PrintToPDF().WithPrintBackground(true).Do(ctx)
+		//	if err != nil {
+		//		return err
+		//	}
+		//	return os.WriteFile("output.pdf", dat, 0766)
+		//}),
 	)
 	if err != nil {
 		return fmt.Errorf("cannot render %s: %s", warcfile, err)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return fmt.Errorf("cannot parse html %s: %s", html, err)
+	}
+
+	c.patchCSS(doc, w)
+	c.patchHTML(doc, w)
+
+	html, err = doc.Html()
+	if err != nil {
+		return fmt.Errorf("cannot generate html: %s", err)
 	}
 
 	output := strings.TrimSuffix(warcfile, ".webarchive") + ".html"
@@ -173,8 +187,11 @@ func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 		}
 	})
 	p.OnResponse().DoFunc(func(r *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
-		url := r.Request.URL.String()
+		if r.Request == nil || r.Request.Body == nil {
+			return r
+		}
 
+		url := r.Request.URL.String()
 		_, exist := warc.GetResource(url)
 		if !exist {
 			rec := model.NewBodyRecorder(r.Body)
@@ -187,6 +204,7 @@ func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 					WebResourceURL:              url,
 					WebResourceData:             body,
 				}
+				log.Printf("caching: %s", url)
 				warc.SetResource(url, res)
 			}()
 		}
@@ -209,4 +227,88 @@ func (c *WarcToHtml) newProxy() *goproxy.ProxyHttpServer {
 	})
 	p.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 	return p
+}
+func (c *WarcToHtml) parseCSS(css string) (urls []string) {
+	re := regexp.MustCompile(`url\((.+?)\)`)
+	ms := re.FindAllStringSubmatch(css, -1)
+	for _, m := range ms {
+		u := strings.Trim(m[1], ` "'`)
+		if strings.HasPrefix(u, "data:") {
+			continue
+		}
+		urls = append(urls, u)
+	}
+	return
+}
+func (c *WarcToHtml) patchCSS(doc *goquery.Document, warc *model.WebArchive) {
+	if c.Verbose {
+		log.Printf("patch CSS references")
+	}
+
+	var replacer = func(css string) *strings.Replacer {
+		var ps []string
+		for _, ref := range c.parseCSS(css) {
+			r, exist := warc.GetResource(ref)
+			if !exist {
+				r, exist = warc.GetResource(warc.PatchRef(ref))
+			}
+			if exist {
+				ps = append(ps, ref, r.DataURI())
+			}
+		}
+		return strings.NewReplacer(ps...)
+	}
+	for _, r := range warc.Resources() {
+		if r.WebResourceMIMEType == "text/css" {
+			css := string(r.WebResourceData)
+			cxx := replacer(css).Replace(css)
+			r.ResetData([]byte(cxx))
+		}
+	}
+	doc.Find("style").Each(func(i int, style *goquery.Selection) {
+		css := style.Text()
+		cxx := replacer(css).Replace(css)
+		style.SetText(cxx)
+	})
+}
+func (c *WarcToHtml) patchHTML(doc *goquery.Document, warc *model.WebArchive) {
+	if c.Verbose {
+		log.Printf("patch HTML references")
+	}
+
+	doc.Find("img,script,link").Each(func(i int, e *goquery.Selection) {
+		attr := "src"
+		switch e.Get(0).Data {
+		case "img":
+			e.RemoveAttr("srcset")
+		case "link":
+			rel, _ := e.Attr("rel")
+			switch rel {
+			default:
+				return
+			case "shortcut icon":
+			case "stylesheet":
+			case "icon":
+			case "shortcut":
+			}
+			attr = "href"
+		}
+		ref, _ := e.Attr(attr)
+		switch {
+		case ref == "":
+			return
+		case strings.HasPrefix(ref, "data:"):
+			return
+		default:
+			r, exist := warc.GetResource(ref)
+			if !exist {
+				r, exist = warc.GetResource(warc.PatchRef(ref))
+			}
+			if exist {
+				e.SetAttr(attr, r.DataURI())
+			} else {
+				log.Printf("cannot find repalcement for %s", ref)
+			}
+		}
+	})
 }

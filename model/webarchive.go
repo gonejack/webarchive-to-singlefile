@@ -90,6 +90,9 @@ func (w *WebArchive) GetResource(ref string) (res *Resource, exist bool) {
 
 	return
 }
+func (w *WebArchive) Resources() map[string]*Resource {
+	return w.res
+}
 
 func (w *WebArchive) decorate(doc *goquery.Document) {
 	u, err := url.Parse(w.WebMainResources.WebResourceURL)
