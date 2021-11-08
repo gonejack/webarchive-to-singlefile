@@ -8,6 +8,7 @@ require (
 	github.com/chromedp/cdproto v0.0.0-20211025030258-2570df970243
 	github.com/chromedp/chromedp v0.7.4
 	github.com/elazarl/goproxy v0.0.0-20210801061803-8e322dfb79c4
+	github.com/go-resty/resty/v2 v2.7.0
 	github.com/vincent-petithory/dataurl v0.0.0-20191104211930-d1553a71de50
 	howett.net/plist v0.0.0-20201203080718-1454fab16a06
 )

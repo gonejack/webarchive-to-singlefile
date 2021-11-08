@@ -11,14 +11,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/PuerkitoBio/goquery"
 	"github.com/alecthomas/kong"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
+	"github.com/chromedp/chromedp/kb"
 	"github.com/elazarl/goproxy"
 
 	"github.com/gonejack/webarchive-to-singlefile/model"
@@ -62,11 +62,11 @@ func (c *WarcToHtml) run() (err error) {
 	}
 	return
 }
-func (c *WarcToHtml) process(warcf string) (err error) {
+func (c *WarcToHtml) process(warc string) (err error) {
 	w := new(model.WebArchive)
-	err = w.From(warcf)
+	err = w.From(warc)
 	if err != nil {
-		return fmt.Errorf("cannot parse %s: %s", warcf, err)
+		return fmt.Errorf("cannot parse %s: %s", warc, err)
 	}
 
 	s := c.newServer(w)
@@ -75,83 +75,49 @@ func (c *WarcToHtml) process(warcf string) (err error) {
 	ctx, cancel := c.newContext(s)
 	defer cancel()
 
-	html := ""
+	var snapshot string
 	err = chromedp.Run(ctx,
 		chromedp.Navigate(w.WebMainResources.WebResourceURL),
-		chromedp.Sleep(time.Second*5),
+		chromedp.Sleep(time.Second*3),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			scroll := `try{$('html, body').animate({scrollTop:$(document).height()}, 4000, 'linear')}catch(e){}`
-			_, exp, err := runtime.Evaluate(scroll).Do(ctx)
-			if err != nil {
-				return err
-			}
-			if exp != nil {
-				return exp
+			scroll := `$('html, body').animate({scrollTop:$(document).height()}, 4000, 'linear');`
+			_, expt, _ := runtime.Evaluate(scroll).Do(ctx)
+			if expt != nil {
+				_ = chromedp.KeyEvent(kb.End).Do(ctx)
+				_ = chromedp.KeyEvent(kb.Home).Do(ctx)
 			}
 			return nil
 		}),
-		chromedp.Sleep(time.Second*5),
-		chromedp.OuterHTML("html", &html),
-		//chromedp.ActionFunc(func(ctx context.Context) error {
-		//	dat, _, err := page.PrintToPDF().WithPrintBackground(true).Do(ctx)
-		//	if err != nil {
-		//		return err
-		//	}
-		//	return os.WriteFile("output.pdf", dat, 0766)
-		//}),
+		chromedp.Sleep(time.Second*3),
+		chromedp.ActionFunc(func(ctx context.Context) (err error) {
+			snapshot, err = page.CaptureSnapshot().Do(ctx)
+			return nil
+		}),
 	)
 	if err != nil {
-		return fmt.Errorf("cannot render %s: %s", warcf, err)
+		return fmt.Errorf("cannot render %s: %s", warc, err)
 	}
 
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	mhtml := model.NewMHTML()
+	err = mhtml.From(strings.NewReader(snapshot))
 	if err != nil {
-		return fmt.Errorf("cannot parse html %s: %s", html, err)
+		return fmt.Errorf("cannot parse mhtml: %s", err)
 	}
+	mhtml.MergeWarc(w)
 
-	c.patchCSS(doc, w)
-	c.patchHTML(doc, w)
-
-	html, err = doc.Html()
+	htm, err := mhtml.BuildEmbedHTML()
 	if err != nil {
-		return fmt.Errorf("cannot generate html: %s", err)
+		return fmt.Errorf("cannot build embed html: %s", err)
 	}
 
-	output := strings.TrimSuffix(warcf, ".webarchive") + ".html"
-	return os.WriteFile(output, []byte(html), 0766)
+	htmlfile := strings.TrimSuffix(warc, ".webarchive") + ".html"
+	return os.WriteFile(htmlfile, []byte(htm), 0766)
 }
 func (c *WarcToHtml) newContext(server *httptest.Server) (context.Context, context.CancelFunc) {
-	opts := []chromedp.ExecAllocatorOption{
-		//chromedp.Headless,
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-
-		// After Puppeteer's default behavior.
-		chromedp.Flag("disable-background-networking", true),
-		chromedp.Flag("enable-features", "NetworkService,NetworkServiceInProcess"),
-		chromedp.Flag("disable-background-timer-throttling", true),
-		chromedp.Flag("disable-backgrounding-occluded-windows", true),
-		chromedp.Flag("disable-breakpad", true),
-		chromedp.Flag("disable-client-side-phishing-detection", true),
-		chromedp.Flag("disable-default-apps", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("disable-features", "site-per-process,Translate,BlinkGenPropertyTrees"),
-		chromedp.Flag("disable-hang-monitor", true),
-		chromedp.Flag("disable-ipc-flooding-protection", true),
-		chromedp.Flag("disable-popup-blocking", true),
-		chromedp.Flag("disable-prompt-on-repost", true),
-		chromedp.Flag("disable-renderer-backgrounding", true),
-		chromedp.Flag("disable-sync", true),
-		chromedp.Flag("force-color-profile", "srgb"),
-		chromedp.Flag("metrics-recording-only", true),
-		chromedp.Flag("safebrowsing-disable-auto-update", true),
-		chromedp.Flag("enable-automation", true),
-		chromedp.Flag("password-store", "basic"),
-		chromedp.Flag("use-mock-keychain", true),
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.IgnoreCertErrors,
 		chromedp.ProxyServer(server.URL),
-	}
+	)
 	ctx, _ := chromedp.NewExecAllocator(context.TODO(), opts...)
 	ctx, cancel := chromedp.NewContext(ctx, chromedp.WithBrowserOption(
 		chromedp.WithDialTimeout(time.Minute),
@@ -161,13 +127,17 @@ func (c *WarcToHtml) newContext(server *httptest.Server) (context.Context, conte
 func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 	p := c.newProxy()
 	p.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		if req.Header.Get("upgrade") == "websocket" {
+			return req, nil
+		}
+
 		req.URL.Host = req.Host
 		url := req.URL.String()
 
 		res, exist := warc.GetResource(url)
 		if exist {
 			if c.Verbose {
-				log.Printf("read local: %s", url)
+				log.Printf("local: %s", url)
 			}
 
 			rsp := &http.Response{
@@ -184,7 +154,7 @@ func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 			return req, rsp
 		} else {
 			if c.Verbose {
-				log.Printf("read remote: %s", url)
+				log.Printf("remote: %s", url)
 			}
 			return req, nil
 		}
@@ -197,21 +167,20 @@ func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 		url := rsp.Request.URL.String()
 		_, exist := warc.GetResource(url)
 		if !exist {
-			rec := model.NewBodyRecorder(rsp.Body)
-			rsp.Body = rec
-			go func() {
-				body := rec.Body()
-				res := &model.Resource{
-					WebResourceMIMEType:         rsp.Header.Get("content-type"),
-					WebResourceTextEncodingName: rsp.Header.Get("content-encoding"),
-					WebResourceURL:              url,
-					WebResourceData:             body,
-				}
-				if c.Verbose {
-					log.Printf("caching: %s", url)
-				}
-				warc.SetResource(url, res)
-			}()
+			var b bytes.Buffer
+			_, _ = io.Copy(&b, rsp.Body)
+			_ = rsp.Body.Close()
+			rsp.Body = io.NopCloser(&b)
+			res := &model.Resource{
+				WebResourceMIMEType:         rsp.Header.Get("content-type"),
+				WebResourceTextEncodingName: rsp.Header.Get("content-encoding"),
+				WebResourceURL:              url,
+				WebResourceData:             b.Bytes(),
+			}
+			if c.Verbose {
+				log.Printf("cached: %s", url)
+			}
+			warc.SetResource(url, res)
 		}
 
 		return rsp
@@ -232,94 +201,4 @@ func (c *WarcToHtml) newProxy() *goproxy.ProxyHttpServer {
 	})
 	p.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 	return p
-}
-func (c *WarcToHtml) parseCSS(css string) (urls []string) {
-	re := regexp.MustCompile(`url\((.+?)\)`)
-	ms := re.FindAllStringSubmatch(css, -1)
-	for _, m := range ms {
-		u := strings.Trim(m[1], ` "'`)
-		if strings.HasPrefix(u, "data:") {
-			continue
-		}
-		urls = append(urls, u)
-	}
-	return
-}
-func (c *WarcToHtml) patchCSS(doc *goquery.Document, warc *model.WebArchive) {
-	if c.Verbose {
-		log.Printf("patch CSS references")
-	}
-
-	var replacer = func(css string) *strings.Replacer {
-		var ps []string
-		for _, ref := range c.parseCSS(css) {
-			r, exist := warc.GetResource(ref)
-			if !exist {
-				r, exist = warc.GetResource(warc.PatchRef(ref))
-			}
-			if exist {
-				if c.Verbose {
-					log.Printf("patching %s", ref)
-				}
-				ps = append(ps, ref, r.DataURI())
-			}
-		}
-		return strings.NewReplacer(ps...)
-	}
-	for _, r := range warc.Resources() {
-		if r.WebResourceMIMEType == "text/css" {
-			css := string(r.WebResourceData)
-			cxx := replacer(css).Replace(css)
-			r.ResetData([]byte(cxx))
-		}
-	}
-	doc.Find("style").Each(func(i int, style *goquery.Selection) {
-		css := style.Text()
-		cxx := replacer(css).Replace(css)
-		style.SetText(cxx)
-	})
-}
-func (c *WarcToHtml) patchHTML(doc *goquery.Document, warc *model.WebArchive) {
-	if c.Verbose {
-		log.Printf("patch HTML references")
-	}
-
-	doc.Find("img,script,link").Each(func(i int, e *goquery.Selection) {
-		attr := "src"
-		switch e.Get(0).Data {
-		case "img":
-			e.RemoveAttr("srcset")
-		case "link":
-			rel, _ := e.Attr("rel")
-			switch rel {
-			default:
-				return
-			case "shortcut icon":
-			case "stylesheet":
-			case "icon":
-			case "shortcut":
-			}
-			attr = "href"
-		}
-		ref, _ := e.Attr(attr)
-		switch {
-		case ref == "":
-			return
-		case strings.HasPrefix(ref, "data:"):
-			return
-		default:
-			if c.Verbose {
-				log.Printf("patching %s", ref)
-			}
-			r, exist := warc.GetResource(ref)
-			if !exist {
-				r, exist = warc.GetResource(warc.PatchRef(ref))
-			}
-			if exist {
-				e.SetAttr(attr, r.DataURI())
-			} else {
-				log.Printf("cannot find repalcement for %s", ref)
-			}
-		}
-	})
 }
