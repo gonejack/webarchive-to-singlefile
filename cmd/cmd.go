@@ -167,15 +167,17 @@ func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 		url := rsp.Request.URL.String()
 		_, exist := warc.GetResource(url)
 		if !exist {
-			var b bytes.Buffer
-			_, _ = io.Copy(&b, rsp.Body)
+			var body bytes.Buffer
+
+			_, _ = io.Copy(&body, rsp.Body)
 			_ = rsp.Body.Close()
-			rsp.Body = io.NopCloser(&b)
+			rsp.Body = io.NopCloser(&body)
+
 			res := &model.Resource{
 				WebResourceMIMEType:         rsp.Header.Get("content-type"),
 				WebResourceTextEncodingName: rsp.Header.Get("content-encoding"),
 				WebResourceURL:              url,
-				WebResourceData:             b.Bytes(),
+				WebResourceData:             body.Bytes(),
 			}
 			if c.Verbose {
 				log.Printf("cached: %s", url)

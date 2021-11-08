@@ -28,7 +28,6 @@ func (w *WebArchive) From(warc string) (err error) {
 	}
 	return
 }
-
 func (w *WebArchive) PatchRef(ref string) string {
 	mu, err := url.Parse(w.WebMainResources.WebResourceURL)
 	if err != nil {

@@ -222,7 +222,6 @@ func (m *MHTML) patchHTML(p *part) (err error) {
 
 	return
 }
-
 func (m *MHTML) findOrFetch(ref string) (p *part, exist bool) {
 	p, exist = m.parts[ref]
 	if !exist {
