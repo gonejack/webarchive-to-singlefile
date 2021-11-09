@@ -1,6 +1,6 @@
 # webarchive-to-singlefile
 
-This command line converts Safari's .webarchive file to complete .html.
+This command line converts Safari's .webarchive file to complete .html like [singlefile](https://github.com/gildas-lormeau/SingleFile).
 
 ![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/gonejack/webarchive-to-singlefile)
 ![Build](https://github.com/gonejack/webarchive-to-singlefile/actions/workflows/go.yml/badge.svg)
@@ -8,8 +8,8 @@ This command line converts Safari's .webarchive file to complete .html.
 
 ### Notice
 
-- Only tested on MacOS.
 - Google Chrome required.
+- Tested on MacOS only.
 
 ### Install
 
