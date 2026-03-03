@@ -66,7 +66,7 @@ func (c *WarcToHtml) process(warc string) (err error) {
 	w := new(model.WebArchive)
 	err = w.From(warc)
 	if err != nil {
-		return fmt.Errorf("cannot parse %s: %s", warc, err)
+		return fmt.Errorf("cannot parse %s: %w", warc, err)
 	}
 
 	s := c.newServer(w)
@@ -95,19 +95,19 @@ func (c *WarcToHtml) process(warc string) (err error) {
 		}),
 	)
 	if err != nil {
-		return fmt.Errorf("cannot render %s: %s", warc, err)
+		return fmt.Errorf("cannot render %s: %w", warc, err)
 	}
 
 	mhtml := model.NewMHTML()
 	err = mhtml.From(strings.NewReader(snapshot))
 	if err != nil {
-		return fmt.Errorf("cannot parse mhtml: %s", err)
+		return fmt.Errorf("cannot parse mhtml: %w", err)
 	}
 	mhtml.MergeWarc(w)
 
 	htm, err := mhtml.BuildEmbedHTML()
 	if err != nil {
-		return fmt.Errorf("cannot build embed html: %s", err)
+		return fmt.Errorf("cannot build embed html: %w", err)
 	}
 
 	htmlfile := strings.TrimSuffix(warc, ".webarchive") + ".html"
