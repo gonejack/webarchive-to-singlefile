@@ -157,11 +157,11 @@ func (m *MHTML) patchHTML(p *part) (err error) {
 		ref, _ := link.Attr("href")
 
 		switch {
+		case strings.HasPrefix(ref, "data:"):
+			return
 		case rel == "stylesheet":
 		case rel == "apple-touch-icon":
 		case rel == "shortcut icon":
-		case strings.HasPrefix(ref, "data:"):
-			return
 		default:
 			return
 		}

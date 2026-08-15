@@ -22,9 +22,9 @@ import (
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
-	"github.com/chromedp/chromedp/kb"
 	"github.com/elazarl/goproxy"
 
+	"github.com/gonejack/webarchive-to-singlefile/javascript"
 	"github.com/gonejack/webarchive-to-singlefile/model"
 )
 
@@ -110,17 +110,10 @@ func (c *WarcToHtml) process(warc string) (err error) {
 	var snapshot string
 	{
 		err = chromedp.Run(ctx,
-			chromedp.Sleep(time.Second*3),
-			chromedp.ActionFunc(func(ctx context.Context) error {
-				scroll := `$('html, body').animate({scrollTop:$(document).height()}, 4000, 'linear');`
-				_, expt, _ := runtime.Evaluate(scroll).Do(ctx)
-				if expt != nil {
-					_ = chromedp.KeyEvent(kb.End).Do(ctx)
-					_ = chromedp.KeyEvent(kb.Home).Do(ctx)
-				}
-				return nil
+			chromedp.Evaluate(javascript.Scroll, nil, func(params *runtime.EvaluateParams) *runtime.EvaluateParams {
+				return params.WithAwaitPromise(true)
 			}),
-			chromedp.Sleep(time.Second*3),
+			chromedp.Sleep(time.Second*1),
 			chromedp.ActionFunc(func(ctx context.Context) (err error) {
 				snapshot, err = page.CaptureSnapshot().Do(ctx)
 				return nil

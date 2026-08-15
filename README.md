@@ -25,10 +25,11 @@ This command line converts Safari's .webarchive file to complete .html like [sin
 
 ```shell
 Flags:
-  -h, --help                 Show context-sensitive help.
-  -v, --verbose              Verbose printing.
-  -j, --disable-js           Disable JavaScript.
-      --chrome-path=PATH     Chrome or Chromium executable path. Defaults to
-                             CHROME_PATH or auto-detection.
-      --about                About.
+  -h, --help                    Show context-sensitive help.
+  -v, --verbose                 Verbose printing.
+  -j, --disable-js              Disable JavaScript.
+      --chrome-path=PATH        Chrome or Chromium executable path. Defaults to CHROME_PATH or auto-detection.
+      --visible                 Show the browser window while rendering.
+      --max-loading-time=10s    Maximum time to wait for page loading.
+      --about                   About.
 ```
