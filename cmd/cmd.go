@@ -26,6 +26,7 @@ import (
 
 type options struct {
 	Verbose    bool     `short:"v" help:"Verbose printing."`
+	DisableJS  bool     `short:"j" help:"Disable JavaScript."`
 	About      bool     `help:"About."`
 	WebArchive []string `arg:"" optional:""`
 }
@@ -118,6 +119,12 @@ func (c *WarcToHtml) newContext(server *httptest.Server) (context.Context, conte
 		chromedp.IgnoreCertErrors,
 		chromedp.ProxyServer(server.URL),
 	)
+	if c.DisableJS {
+		opts = append(opts,
+			chromedp.Flag("blink-settings", "scriptEnabled=false"),
+		)
+	}
+
 	ctx, _ := chromedp.NewExecAllocator(context.TODO(), opts...)
 	ctx, cancel := chromedp.NewContext(ctx, chromedp.WithBrowserOption(
 		chromedp.WithDialTimeout(time.Minute),
