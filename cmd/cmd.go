@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,7 +11,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,8 +29,12 @@ import (
 )
 
 type options struct {
-	Verbose    bool     `short:"v" help:"Verbose printing."`
-	DisableJS  bool     `short:"j" help:"Disable JavaScript."`
+	Verbose        bool          `short:"v" help:"Verbose printing."`
+	DisableJS      bool          `short:"j" help:"Disable JavaScript."`
+	ChromePath     string        `name:"chrome-path" placeholder:"PATH" help:"Chrome or Chromium executable path. Defaults to CHROME_PATH or auto-detection."`
+	Visible        bool          `name:"visible" help:"Show the browser window while rendering."`
+	MaxLoadingTime time.Duration `name:"max-loading-time" default:"10s" help:"Maximum time to wait for page loading."`
+
 	About      bool     `help:"About."`
 	WebArchive []string `arg:"" optional:""`
 }
@@ -70,33 +78,57 @@ func (c *WarcToHtml) process(warc string) (err error) {
 		return fmt.Errorf("cannot parse %s: %w", warc, err)
 	}
 
-	s := c.newServer(w)
-	defer s.Close()
+	server := c.newServer(w)
+	defer server.Close()
 
-	ctx, cancel := c.newContext(s)
-	defer cancel()
-
-	var snapshot string
-	err = chromedp.Run(ctx,
-		chromedp.Navigate(w.WebMainResources.WebResourceURL),
-		chromedp.Sleep(time.Second*3),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			scroll := `$('html, body').animate({scrollTop:$(document).height()}, 4000, 'linear');`
-			_, expt, _ := runtime.Evaluate(scroll).Do(ctx)
-			if expt != nil {
-				_ = chromedp.KeyEvent(kb.End).Do(ctx)
-				_ = chromedp.KeyEvent(kb.Home).Do(ctx)
-			}
-			return nil
-		}),
-		chromedp.Sleep(time.Second*3),
-		chromedp.ActionFunc(func(ctx context.Context) (err error) {
-			snapshot, err = page.CaptureSnapshot().Do(ctx)
-			return nil
-		}),
-	)
+	ctx, cancel, err := c.newContext(server)
 	if err != nil {
 		return fmt.Errorf("cannot render %s: %w", warc, err)
+	}
+	defer cancel()
+
+	err = chromedp.Run(ctx)
+	if err != nil {
+		return fmt.Errorf("cannot start browser for %s: %w", warc, err)
+	}
+	// loading
+	{
+		cxx, cancel := context.WithTimeout(ctx, c.MaxLoadingTime)
+		defer cancel()
+		err = chromedp.Run(cxx, chromedp.Navigate(w.WebMainResources.WebResourceURL))
+		if err != nil {
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("cannot navigate %s: %w", warc, err)
+			}
+			log.Printf("navigation timed out after %s, continue rendering", c.MaxLoadingTime)
+			if err = chromedp.Run(ctx, page.StopLoading()); err != nil {
+				return fmt.Errorf("cannot stop loading %s: %w", warc, err)
+			}
+		}
+	}
+	// rendering
+	var snapshot string
+	{
+		err = chromedp.Run(ctx,
+			chromedp.Sleep(time.Second*3),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				scroll := `$('html, body').animate({scrollTop:$(document).height()}, 4000, 'linear');`
+				_, expt, _ := runtime.Evaluate(scroll).Do(ctx)
+				if expt != nil {
+					_ = chromedp.KeyEvent(kb.End).Do(ctx)
+					_ = chromedp.KeyEvent(kb.Home).Do(ctx)
+				}
+				return nil
+			}),
+			chromedp.Sleep(time.Second*3),
+			chromedp.ActionFunc(func(ctx context.Context) (err error) {
+				snapshot, err = page.CaptureSnapshot().Do(ctx)
+				return nil
+			}),
+		)
+		if err != nil {
+			return fmt.Errorf("cannot render %s: %w", warc, err)
+		}
 	}
 
 	mhtml := model.NewMHTML()
@@ -114,75 +146,78 @@ func (c *WarcToHtml) process(warc string) (err error) {
 	htmlfile := strings.TrimSuffix(warc, ".webarchive") + ".html"
 	return os.WriteFile(htmlfile, []byte(htm), 0766)
 }
-func (c *WarcToHtml) newContext(server *httptest.Server) (context.Context, context.CancelFunc) {
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.IgnoreCertErrors,
-		chromedp.ProxyServer(server.URL),
+func (c *WarcToHtml) newContext(server *httptest.Server) (context.Context, context.CancelFunc, error) {
+	opts := slices.Concat(
+		chromedp.DefaultExecAllocatorOptions[:],
+		[]chromedp.ExecAllocatorOption{
+			chromedp.IgnoreCertErrors,
+			chromedp.ProxyServer(server.URL),
+			chromedp.Flag("disable-features", "Translate,TranslateUI"),
+		},
 	)
-	if c.DisableJS {
-		opts = append(opts,
-			chromedp.Flag("blink-settings", "scriptEnabled=false"),
-		)
+	where, err := c.findBrowser()
+	if err != nil {
+		return nil, nil, err
 	}
-
+	if where != "" {
+		opts = append(opts, chromedp.ExecPath(where))
+	}
+	if c.Visible {
+		opts = append(opts, chromedp.Flag("headless", false))
+	}
+	if c.DisableJS {
+		opts = append(opts, chromedp.Flag("blink-settings", "scriptEnabled=false"))
+	}
 	ctx, _ := chromedp.NewExecAllocator(context.TODO(), opts...)
 	ctx, cancel := chromedp.NewContext(ctx, chromedp.WithBrowserOption(
 		chromedp.WithDialTimeout(time.Minute),
 	))
-	return ctx, cancel
+	return ctx, cancel, nil
 }
 func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 	p := c.newProxy()
-	p.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-		if req.Header.Get("upgrade") == "websocket" {
-			return req, nil
+	p.OnRequest().DoFunc(func(rq *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		if rq.Header.Get("upgrade") == "websocket" {
+			return rq, nil
 		}
-
-		req.URL.Host = req.Host
-		url := req.URL.String()
-
+		rq.URL.Host = rq.Host
+		url := rq.URL.String()
 		res, exist := warc.GetResource(url)
 		if exist {
 			if c.Verbose {
 				log.Printf("local: %s", url)
 			}
-
-			rsp := &http.Response{
+			rp := &http.Response{
 				Status:           http.StatusText(200),
 				StatusCode:       200,
-				Request:          req,
-				TransferEncoding: req.TransferEncoding,
+				Request:          rq,
+				TransferEncoding: rq.TransferEncoding,
 				ContentLength:    int64(len(res.WebResourceData)),
 				Body:             io.NopCloser(bytes.NewReader(res.WebResourceData)),
 			}
-			rsp.Header = make(http.Header)
-			rsp.Header.Set("Content-Type", res.WebResourceMIMEType)
-
-			return req, rsp
-		} else {
-			if c.Verbose {
-				log.Printf("remote: %s", url)
-			}
-			return req, nil
+			rp.Header = make(http.Header)
+			rp.Header.Set("Content-Type", res.WebResourceMIMEType)
+			return rq, rp
 		}
+		if c.Verbose {
+			log.Printf("remote: %s", url)
+		}
+		return rq, nil
 	})
-	p.OnResponse().DoFunc(func(rsp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
-		if rsp.Request == nil || rsp.Request.Body == nil {
-			return rsp
+	p.OnResponse().DoFunc(func(rp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+		if rp == nil || rp.Request == nil || rp.Request.Body == nil {
+			return rp
 		}
-
-		url := rsp.Request.URL.String()
+		url := rp.Request.URL.String()
 		_, exist := warc.GetResource(url)
 		if !exist {
 			var body bytes.Buffer
-
-			_, _ = io.Copy(&body, rsp.Body)
-			_ = rsp.Body.Close()
-			rsp.Body = io.NopCloser(&body)
-
+			_, _ = io.Copy(&body, rp.Body)
+			_ = rp.Body.Close()
+			rp.Body = io.NopCloser(&body)
 			res := &model.Resource{
-				WebResourceMIMEType:         rsp.Header.Get("content-type"),
-				WebResourceTextEncodingName: rsp.Header.Get("content-encoding"),
+				WebResourceMIMEType:         rp.Header.Get("content-type"),
+				WebResourceTextEncodingName: rp.Header.Get("content-encoding"),
 				WebResourceURL:              url,
 				WebResourceData:             body.Bytes(),
 			}
@@ -191,8 +226,7 @@ func (c *WarcToHtml) newServer(warc *model.WebArchive) *httptest.Server {
 			}
 			warc.SetResource(url, res)
 		}
-
-		return rsp
+		return rp
 	})
 	return httptest.NewServer(p)
 }
@@ -210,4 +244,35 @@ func (c *WarcToHtml) newProxy() *goproxy.ProxyHttpServer {
 	})
 	p.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 	return p
+}
+func (c *WarcToHtml) findBrowser() (string, error) {
+	preset := cmp.Or(c.ChromePath, os.Getenv("CHROME_PATH"))
+	if preset != "" {
+		path, err := exec.LookPath(preset)
+		if err != nil {
+			return "", fmt.Errorf("cannot find Chrome executable %q: %w", preset, err)
+		}
+		return path, nil
+	}
+	switch goruntime.GOOS {
+	case "darwin":
+		home, _ := os.UserHomeDir()
+		if home == "" {
+			return "", nil
+		}
+		applications := filepath.Join(home, "Applications")
+		candidates := []string{
+			filepath.Join(applications, "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+			filepath.Join(applications, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+			filepath.Join(applications, "Chromium.app", "Contents", "MacOS", "Chromium"),
+			filepath.Join(applications, "Brave Browser.app", "Contents", "MacOS", "Brave Browser"),
+			filepath.Join(applications, "Microsoft Edge.app", "Contents", "MacOS", "Microsoft Edge"),
+		}
+		for _, candidate := range candidates {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+		}
+	}
+	return "", nil
 }
