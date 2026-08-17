@@ -29,13 +29,13 @@ import (
 )
 
 type options struct {
-	Verbose        bool          `short:"v" help:"Verbose printing."`
-	DisableJS      bool          `short:"j" help:"Disable JavaScript."`
 	ChromePath     string        `name:"chrome-path" placeholder:"PATH" help:"Chrome or Chromium executable path. Defaults to CHROME_PATH or auto-detection."`
 	Visible        bool          `name:"visible" help:"Show the browser window while rendering."`
+	DisableJS      bool          `short:"j" help:"Disable JavaScript."`
 	MaxLoadingTime time.Duration `name:"max-loading-time" default:"10s" help:"Maximum time to wait for page loading."`
+	Verbose        bool          `short:"v" help:"Verbose printing."`
+	About          bool          `help:"About."`
 
-	About      bool     `help:"About."`
 	WebArchive []string `arg:"" optional:""`
 }
 
@@ -153,6 +153,7 @@ func (c *WarcToHtml) newContext(server *httptest.Server) (context.Context, conte
 		return nil, nil, err
 	}
 	if where != "" {
+		log.Printf("using %s", where)
 		opts = append(opts, chromedp.ExecPath(where))
 	}
 	if c.Visible {
